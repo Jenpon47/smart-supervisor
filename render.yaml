@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: smart-supervisor-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: CORS_ORIGINS
+        value: https://jenpon47.github.io,http://127.0.0.1:3000,http://localhost:3000
+      - key: JWT_DEV_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_DEFAULT_TO
+        sync: false
