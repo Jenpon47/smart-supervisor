@@ -7057,21 +7057,39 @@ function parseScreeningWorkbook(wb) {
 
   var sheetNames = wb.SheetNames;
 
-  // Find sheets by index or name pattern
-  function findSheet(patterns) {
+  // Find sheets by strict group/assessment labels. Avoid broad tokens like "3" or "ม.3",
+  // because they can accidentally match the Thai ป.1-ม.3 sheet before the O-NET sheets.
+  function normalizeSheetName(name) {
+    return String(name || '').replace(/\s+/g, '').toLowerCase();
+  }
+
+  function findSheetStrict(matchers) {
     for (var i = 0; i < sheetNames.length; i++) {
-      var name = sheetNames[i];
-      for (var j = 0; j < patterns.length; j++) {
-        if (name.indexOf(patterns[j]) >= 0) return wb.Sheets[name];
+      var rawName = sheetNames[i];
+      var normalized = normalizeSheetName(rawName);
+      for (var j = 0; j < matchers.length; j++) {
+        if (matchers[j](rawName, normalized)) return wb.Sheets[rawName];
       }
     }
     return null;
   }
 
-  var sh1 = findSheet(['กลุ่ม1','กลุม1','1','ภาษาไทย']);
-  var sh2 = findSheet(['กลุ่ม2','กลุม2','2','NT']);
-  var sh3 = findSheet(['กลุ่ม3','กลุม3','3','O-NET ป.6','ป.6']);
-  var sh4 = findSheet(['กลุ่ม4','กลุม4','4','O-NET ม.3','ม.3']);
+  var sh1 = findSheetStrict([
+    function(raw, name) { return name.indexOf('กลุ่ม1') >= 0 || name.indexOf('กลุ่มที่1') >= 0; },
+    function(raw, name) { return name.indexOf('ภาษาไทย') >= 0 && name.indexOf('ป.1') >= 0 && name.indexOf('ม.3') >= 0 && name.indexOf('o-net') < 0; }
+  ]);
+  var sh2 = findSheetStrict([
+    function(raw, name) { return name.indexOf('กลุ่ม2') >= 0 || name.indexOf('กลุ่มที่2') >= 0; },
+    function(raw, name) { return name.indexOf('nt') >= 0 && name.indexOf('ป.3') >= 0; }
+  ]);
+  var sh3 = findSheetStrict([
+    function(raw, name) { return name.indexOf('กลุ่ม3') >= 0 || name.indexOf('กลุ่มที่3') >= 0; },
+    function(raw, name) { return name.indexOf('o-net') >= 0 && name.indexOf('ป.6') >= 0; }
+  ]);
+  var sh4 = findSheetStrict([
+    function(raw, name) { return name.indexOf('กลุ่ม4') >= 0 || name.indexOf('กลุ่มที่4') >= 0; },
+    function(raw, name) { return name.indexOf('o-net') >= 0 && name.indexOf('ม.3') >= 0; }
+  ]);
 
   if (!sh1 && !sh2 && !sh3 && !sh4) {
     showNotification('error', '❌ ไม่พบ Sheet ข้อมูลในไฟล์ — กรุณาใช้ Template ที่ระบบสร้างให้');
@@ -7154,14 +7172,22 @@ function parseONETSheet(sheet, result, level) {
     if (!name || name.length < 3) continue;
     var school = matchSchoolName(name);
     if (!school) continue;
-    // E=เข้าสอบ | ไทย:F,G,H | อังกฤษ:J,K,L | คณิต:N,O,P | วิทย์:R,S,T
+    // Template columns: E=นร.เข้าสอบ shared by all subjects.
+    // F-H=ภาษาไทย, J-L=คณิตศาสตร์, N-P=วิทยาศาสตร์, R-T=ภาษาอังกฤษ.
     var total = toNum(row[4]);
     var subjects = {
       thai:    { total: total, green: toNum(row[5]),  yellow: toNum(row[6]),  red: toNum(row[7])  },
-      english: { total: total, green: toNum(row[9]),  yellow: toNum(row[10]), red: toNum(row[11]) },
-      math:    { total: total, green: toNum(row[13]), yellow: toNum(row[14]), red: toNum(row[15]) },
-      science: { total: total, green: toNum(row[17]), yellow: toNum(row[18]), red: toNum(row[19]) }
+      math:    { total: total, green: toNum(row[9]),  yellow: toNum(row[10]), red: toNum(row[11]) },
+      science: { total: total, green: toNum(row[13]), yellow: toNum(row[14]), red: toNum(row[15]) },
+      english: { total: total, green: toNum(row[17]), yellow: toNum(row[18]), red: toNum(row[19]) }
     };
+    ['thai','math','science','english'].forEach(function(subjectKey) {
+      var subject = subjects[subjectKey];
+      var checksum = subject.green + subject.yellow + subject.red;
+      if (total > 0 && checksum !== total) {
+        result.warnings.push(school.name + ': O-NET ' + level + ' ' + subjectKey + ' สีรวม=' + checksum + ' ไม่เท่ากับ นร.เข้าสอบ=' + total);
+      }
+    });
     data[school.id] = { schoolId: school.id, name: school.name, level: level, subjects: subjects };
   }
   return data;
