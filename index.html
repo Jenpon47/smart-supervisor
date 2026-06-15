@@ -7173,13 +7173,13 @@ function parseONETSheet(sheet, result, level) {
     var school = matchSchoolName(name);
     if (!school) continue;
     // Template columns: E=นร.เข้าสอบ shared by all subjects.
-    // F-H=ภาษาไทย, J-L=คณิตศาสตร์, N-P=วิทยาศาสตร์, R-T=ภาษาอังกฤษ.
+    // F-H=ภาษาไทย, J-L=ภาษาอังกฤษ, N-P=คณิตศาสตร์, R-T=วิทยาศาสตร์.
     var total = toNum(row[4]);
     var subjects = {
       thai:    { total: total, green: toNum(row[5]),  yellow: toNum(row[6]),  red: toNum(row[7])  },
-      math:    { total: total, green: toNum(row[9]),  yellow: toNum(row[10]), red: toNum(row[11]) },
-      science: { total: total, green: toNum(row[13]), yellow: toNum(row[14]), red: toNum(row[15]) },
-      english: { total: total, green: toNum(row[17]), yellow: toNum(row[18]), red: toNum(row[19]) }
+      english: { total: total, green: toNum(row[9]),  yellow: toNum(row[10]), red: toNum(row[11]) },
+      math:    { total: total, green: toNum(row[13]), yellow: toNum(row[14]), red: toNum(row[15]) },
+      science: { total: total, green: toNum(row[17]), yellow: toNum(row[18]), red: toNum(row[19]) }
     };
     ['thai','math','science','english'].forEach(function(subjectKey) {
       var subject = subjects[subjectKey];
