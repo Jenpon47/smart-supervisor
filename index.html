@@ -4720,7 +4720,41 @@ async function apiPost(resource, payload, id) {
   return resp.json();
 }
 
+function normalizeBackendSchoolRows(rows) {
+  return (rows || []).map(function(row) {
+    var payload = row && row.payload && typeof row.payload === 'object' ? row.payload : {};
+    var merged = Object.assign({}, payload, row || {});
+    delete merged.payload;
+    delete merged.payload_json;
+    if (payload.screening && !merged.screening) merged.screening = payload.screening;
+    if (payload.amphoe && !merged.amphoe) merged.amphoe = payload.amphoe;
+    if (payload.group && !merged.group) merged.group = payload.group;
+    if (payload.sn1 && !merged.sn1) merged.sn1 = payload.sn1;
+    if (payload.sn2 && !merged.sn2) merged.sn2 = payload.sn2;
+    return merged;
+  });
+}
+
+async function loadSharedSchoolsFromBackend() {
+  if (!window.SmartAPI || !SmartAPI.listSchools) return false;
+  try {
+    const rows = await SmartAPI.listSchools();
+    if (Array.isArray(rows) && rows.length > 0) {
+      SCHOOLS = normalizeSchoolRecords(normalizeBackendSchoolRows(rows), true);
+      nextId = SCHOOLS.reduce(function(max,s){ return Math.max(max, asNonNegativeInt(s.id, 0)); },0) + 1;
+      saveData();
+      showNotification('success', 'โหลดข้อมูลกลางจากระบบเรียบร้อย');
+      return true;
+    }
+  } catch(e) {
+    console.warn('Shared backend fetch failed, using local data:', e);
+    showNotification('warning', 'ยังใช้ข้อมูลในเครื่องอยู่ เพราะโหลดข้อมูลกลางไม่สำเร็จ');
+  }
+  return false;
+}
+
 async function fetchSchools() {
+  if (await loadSharedSchoolsFromBackend()) return SCHOOLS;
   if (!API_CONFIG.connected || !apiBaseUrl()) return SCHOOLS;
   try {
     const data = await apiGet('schools', '', API_CONFIG.districtId ? { district: API_CONFIG.districtId } : {});
@@ -6046,14 +6080,14 @@ window.renderTeamKPI = function() {
       + '<div style="margin-left:auto;font-size:12px;color:'+statusColor+';font-weight:600">'+statusText+'</div>'
       + '</div>'
       + '<div class="sn-kpi-body">'
-      + snKpiCell(d.myLogs.length+'/'+d.visitTarget, 'Toolkit Log', d.myLogs.length>=d.visitTarget?'var(--teal)':'var(--coral)', d.visitPct+'% ของเป้า')
+      + snKpiCell(d.myLogs.length + ' ครั้ง', 'Toolkit Log', d.myLogs.length>=d.visitTarget?'var(--teal)':'var(--coral)', 'เป้า ' + d.visitTarget + ' ครั้ง/เดือน · ' + d.visitPct + '%')
       + snKpiCell(d.mySchools.length, 'โรงเรียน', 'var(--accent)', 'รับผิดชอบ')
       + snKpiCell(d.redCount, 'ธงแดง', d.redCount>0?'var(--coral)':'var(--teal)', d.redCount>0?'ต้องนิเทศ':'ปกติ')
       + snKpiCell(d.greenCount, 'ธงเขียว', 'var(--teal)', 'ระบบดี')
       + snKpiCell(d.avgRed+'%', '🔴 เฉลี่ย', d.avgRed>30?'var(--coral)':d.avgRed>20?'var(--amber)':'var(--teal)', 'ในโรงเรียนตน')
       + '</div>'
       + '<div class="sn-progress-wrap">'
-      + '<div class="sn-progress-label"><span>ความคืบหน้า Log รายเดือน</span><span>'+d.myLogs.length+' / '+d.visitTarget+' ครั้ง</span></div>'
+      + '<div class="sn-progress-label"><span>ความคืบหน้า Log รายเดือน</span><span>'+d.myLogs.length+' ครั้ง / เป้า '+d.visitTarget+' ครั้ง</span></div>'
       + '<div class="sn-progress-track"><div class="sn-progress-fill" style="width:'+d.visitPct+'%;background:'+barColor+'"></div></div>'
       + '</div>'
       + '</div>';
@@ -9319,16 +9353,14 @@ document.addEventListener('DOMContentLoaded', () => {
   updateSidebarStats();
   renderDashboardLogs();
 
-  if (API_CONFIG.connected && apiBaseUrl()) {
-    fetchSchools().then(function() {
-      refreshDashboard();
-      refreshAdminTable();
-      updateSidebarStats();
-      populateSchoolSelects();
-      populateSNSelects();
-      if ((document.querySelector('.page.active') || {}).id === 'page-team') renderTeamDashboard();
-    });
-  }
+  fetchSchools().then(function() {
+    refreshDashboard();
+    refreshAdminTable();
+    updateSidebarStats();
+    populateSchoolSelects();
+    populateSNSelects();
+    if ((document.querySelector('.page.active') || {}).id === 'page-team') renderTeamDashboard();
+  });
 
   // Set today's date defaults
   const today = new Date().toISOString().split('T')[0];

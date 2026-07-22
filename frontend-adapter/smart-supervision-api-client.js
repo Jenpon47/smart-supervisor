@@ -84,6 +84,7 @@
     },
     health: () => request('/health'),
     me: () => request('/me'),
+    listSchools: () => request('/schools'),
     syncSchools: schools => request('/schools/bulk', {
       method: 'POST',
       body: JSON.stringify((schools || window.SCHOOLS || []).map(schoolToApi))
