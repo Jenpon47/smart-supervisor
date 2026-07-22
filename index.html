@@ -4735,6 +4735,12 @@ function normalizeBackendSchoolRows(rows) {
   });
 }
 
+function hasLocalImportedSchoolData() {
+  return Array.isArray(SCHOOLS) && SCHOOLS.some(function(s) {
+    return !!(s && (s.screening || s.baselineAt || s.dataSource === 'baseline_import' || s.dataSource === 'imported'));
+  });
+}
+
 async function loadSharedSchoolsFromBackend() {
   if (!window.SmartAPI || !SmartAPI.listSchools) return false;
   try {
@@ -4745,6 +4751,11 @@ async function loadSharedSchoolsFromBackend() {
       saveData();
       showNotification('success', 'โหลดข้อมูลกลางจากระบบเรียบร้อย');
       return true;
+    }
+    if (Array.isArray(rows) && rows.length === 0 && hasLocalImportedSchoolData()) {
+      await syncSchoolsToBackend('seed_empty_backend');
+      showNotification('success', 'ส่งข้อมูลชุดแรกขึ้นระบบกลางเรียบร้อย');
+      return false;
     }
   } catch(e) {
     console.warn('Shared backend fetch failed, using local data:', e);
