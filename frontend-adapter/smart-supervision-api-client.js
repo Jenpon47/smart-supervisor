@@ -47,6 +47,18 @@
     };
   }
 
+  function logToApi(log) {
+    return {
+      school_id: Number(log.schoolId || 0),
+      teacher: log.teacher || '-',
+      log_type: log.type || 'coaching',
+      next_step: log.nextStep || '',
+      followup: log.followup || null,
+      payload: log,
+      notify: false
+    };
+  }
+
   function buildInsightPayload() {
     const schools = (window.SCHOOLS || []).slice();
     const priority = schools
@@ -85,21 +97,18 @@
     health: () => request('/health'),
     me: () => request('/me'),
     listSchools: () => request('/schools'),
+    listLogs: () => request('/coaching-logs'),
+    syncLogs: logs => request('/coaching-logs/bulk', {
+      method: 'POST',
+      body: JSON.stringify((logs || window.LOGS || []).map(logToApi).filter(item => item.school_id > 0))
+    }),
     syncSchools: schools => request('/schools/bulk', {
       method: 'POST',
       body: JSON.stringify((schools || window.SCHOOLS || []).map(schoolToApi))
     }),
     createCoachingLog: log => request('/coaching-logs', {
       method: 'POST',
-      body: JSON.stringify({
-        school_id: log.schoolId,
-        teacher: log.teacher,
-        log_type: log.type || 'coaching',
-        next_step: log.nextStep || '',
-        followup: log.followup || null,
-        payload: log,
-        notify: true
-      })
+      body: JSON.stringify(logToApi(log))
     }),
     createScreeningImport: parsed => request('/screening/imports', {
       method: 'POST',

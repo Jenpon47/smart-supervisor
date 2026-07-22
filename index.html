@@ -5403,7 +5403,47 @@ function loadLogs() {
   LOGS = safeReadJSON(DB_KEY_LOGS, []);
   if (!Array.isArray(LOGS)) LOGS = [];
 }
-function saveLogs() { safeWriteJSON(DB_KEY_LOGS, LOGS); }
+
+function mergeLogsById(localLogs, remoteLogs) {
+  var byId = {};
+  (remoteLogs || []).concat(localLogs || []).forEach(function(log) {
+    if (!log) return;
+    var id = log.id != null ? String(log.id) : String(Date.now() + Math.random());
+    byId[id] = Object.assign({}, byId[id] || {}, log);
+  });
+  return Object.keys(byId).map(function(id){ return byId[id]; }).sort(function(a,b) {
+    return String(b.date || b.month || b.createdAt || '').localeCompare(String(a.date || a.month || a.createdAt || ''));
+  });
+}
+
+async function loadSharedLogsFromBackend() {
+  if (!window.SmartAPI || !SmartAPI.listLogs) return false;
+  try {
+    var rows = await SmartAPI.listLogs();
+    if (Array.isArray(rows) && rows.length > 0) {
+      LOGS = mergeLogsById(LOGS, rows);
+      saveLogs(false);
+      showNotification('success', 'โหลด Toolkit Log กลางเรียบร้อย');
+      return true;
+    }
+    if (Array.isArray(rows) && rows.length === 0 && LOGS.length > 0 && SmartAPI.syncLogs) {
+      await SmartAPI.syncLogs(LOGS);
+      showNotification('success', 'ส่ง Toolkit Log ชุดแรกขึ้นระบบกลางเรียบร้อย');
+    }
+  } catch(e) {
+    console.warn('Shared log fetch failed, using local logs:', e);
+  }
+  return false;
+}
+
+function saveLogs(syncToBackend) {
+  safeWriteJSON(DB_KEY_LOGS, LOGS);
+  if (syncToBackend !== false && window.SmartAPI && SmartAPI.syncLogs) {
+    SmartAPI.syncLogs(LOGS).catch(function(err) {
+      console.warn('Backend log sync failed:', err);
+    });
+  }
+}
 
 function switchToolkitTab(id, btn) {
   document.querySelectorAll('#page-toolkit .tab-content').forEach(t => t.classList.remove('active'));
@@ -9370,6 +9410,12 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSidebarStats();
     populateSchoolSelects();
     populateSNSelects();
+    if ((document.querySelector('.page.active') || {}).id === 'page-team') renderTeamDashboard();
+  });
+
+  loadSharedLogsFromBackend().then(function() {
+    renderDashboardLogs();
+    renderHistory();
     if ((document.querySelector('.page.active') || {}).id === 'page-team') renderTeamDashboard();
   });
 

@@ -109,6 +109,12 @@ def init_db() -> None:
             );
             """
         )
+        existing_log_cols = {row["name"] for row in conn.execute("PRAGMA table_info(coaching_logs)").fetchall()}
+        if "client_log_id" not in existing_log_cols:
+            conn.execute("ALTER TABLE coaching_logs ADD COLUMN client_log_id TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_coaching_logs_client_log_id_unique ON coaching_logs(client_log_id)"
+        )
         conn.execute(
             "INSERT OR IGNORE INTO users(id,email,name,role,created_at) VALUES (1,?,?,?,?)",
             ("admin@demo.local", "ผอ.กลุ่มนิเทศ Demo", "admin", now_iso()),
@@ -159,9 +165,9 @@ class SchoolIn(BaseModel):
 
 class CoachingLogIn(BaseModel):
     school_id: int
-    teacher: str
+    teacher: str = ""
     log_type: str = "coaching"
-    next_step: str
+    next_step: str = ""
     followup: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     notify: bool = True
@@ -244,17 +250,49 @@ def create_screening_import(payload: ScreeningImportIn, user: CurrentUser = Depe
     return {"import_id": cur.lastrowid, "updated": len(payload.schools)}
 
 
+def log_client_id(payload: CoachingLogIn) -> str | None:
+    raw = payload.payload.get("id") if isinstance(payload.payload, dict) else None
+    return str(raw) if raw is not None and raw != "" else None
+
+
+def log_payload_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    data = json.loads(row["payload_json"] or "{}")
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("id", row["client_log_id"] or row["id"])
+    data.setdefault("schoolId", row["school_id"])
+    data.setdefault("teacher", row["teacher"])
+    data.setdefault("type", row["log_type"])
+    data.setdefault("nextStep", row["next_step"] or "")
+    data.setdefault("followup", row["followup"])
+    data.setdefault("createdAt", row["created_at"])
+    return data
+
+
+@app.get("/coaching-logs")
+def list_coaching_logs(user: CurrentUser = Depends(require_role("supervisor", "admin"))) -> list[dict[str, Any]]:
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM coaching_logs ORDER BY created_at DESC, id DESC").fetchall()
+    return [log_payload_from_row(row) for row in rows]
+
+
 @app.post("/coaching-logs")
 async def create_coaching_log(payload: CoachingLogIn, user: CurrentUser = Depends(require_role("supervisor", "admin"))) -> dict[str, Any]:
+    client_id = log_client_id(payload)
     with db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO coaching_logs(school_id,teacher,supervisor_id,log_type,next_step,followup,payload_json,created_at)
-            VALUES (?,?,?,?,?,?,?,?)
+            INSERT INTO coaching_logs(client_log_id,school_id,teacher,supervisor_id,log_type,next_step,followup,payload_json,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(client_log_id) DO UPDATE SET
+              school_id=excluded.school_id, teacher=excluded.teacher, supervisor_id=excluded.supervisor_id,
+              log_type=excluded.log_type, next_step=excluded.next_step, followup=excluded.followup,
+              payload_json=excluded.payload_json
             """,
             (
+                client_id,
                 payload.school_id,
-                payload.teacher,
+                payload.teacher or "-",
                 user.id,
                 payload.log_type,
                 payload.next_step,
@@ -265,7 +303,36 @@ async def create_coaching_log(payload: CoachingLogIn, user: CurrentUser = Depend
         )
     if payload.notify and payload.next_step:
         await send_line_message(f"Next Step: {payload.next_step}\nกำหนดติดตาม: {payload.followup or 'ภายใน 1 สัปดาห์'}")
-    return {"log_id": cur.lastrowid}
+    return {"log_id": cur.lastrowid, "client_log_id": client_id}
+
+
+@app.post("/coaching-logs/bulk")
+def upsert_coaching_logs(payload: list[CoachingLogIn], user: CurrentUser = Depends(require_role("supervisor", "admin"))) -> dict[str, Any]:
+    with db() as conn:
+        for log in payload:
+            client_id = log_client_id(log)
+            conn.execute(
+                """
+                INSERT INTO coaching_logs(client_log_id,school_id,teacher,supervisor_id,log_type,next_step,followup,payload_json,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(client_log_id) DO UPDATE SET
+                  school_id=excluded.school_id, teacher=excluded.teacher, supervisor_id=excluded.supervisor_id,
+                  log_type=excluded.log_type, next_step=excluded.next_step, followup=excluded.followup,
+                  payload_json=excluded.payload_json
+                """,
+                (
+                    client_id,
+                    log.school_id,
+                    log.teacher or "-",
+                    user.id,
+                    log.log_type,
+                    log.next_step,
+                    log.followup,
+                    json.dumps(log.payload, ensure_ascii=False),
+                    now_iso(),
+                ),
+            )
+    return {"updated": len(payload)}
 
 
 @app.post("/ai/strategic-insight")
