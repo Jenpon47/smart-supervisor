@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="th">
 <head>
 <meta charset="UTF-8">
@@ -4541,6 +4541,74 @@ function averageRealMetric(rows, key) {
   return Math.round(vals.reduce(function(sum, v){ return sum + parseFloat(v); }, 0) / vals.length);
 }
 
+function normalizeTeacherMetricFields(school) {
+  if (!school || typeof school !== 'object') return school;
+  var total = asNonNegativeInt(
+    school.teacherTotal !== undefined ? school.teacherTotal :
+    school.teachTotal !== undefined ? school.teachTotal :
+    school.teachersTotal !== undefined ? school.teachersTotal : null,
+    0
+  );
+  var min15Passed = asNonNegativeInt(
+    school.teacherMin15Passed !== undefined ? school.teacherMin15Passed :
+    school.teachMin15 !== undefined ? school.teachMin15 :
+    school.teachersMin15 !== undefined ? school.teachersMin15 : null,
+    0
+  );
+  var adjustPassed = asNonNegativeInt(
+    school.teacherAdjustPassed !== undefined ? school.teacherAdjustPassed :
+    school.teachAdjust !== undefined ? school.teachAdjust :
+    school.teachersAdjust !== undefined ? school.teachersAdjust : null,
+    0
+  );
+  if (total > 0) {
+    min15Passed = Math.min(min15Passed, total);
+    adjustPassed = Math.min(adjustPassed, total);
+    school.teacherTotal = total;
+    school.teacherMin15Passed = min15Passed;
+    school.teacherAdjustPassed = adjustPassed;
+    school.teachTotal = total;
+    school.teachMin15 = min15Passed;
+    school.teachAdjust = adjustPassed;
+    school.min15 = Math.round(min15Passed / total * 100);
+    school.adjust = Math.round(adjustPassed / total * 100);
+    school.teacherMetricSource = 'teacher_counts';
+  }
+  return school;
+}
+
+function getSchoolMin15Pct(school) {
+  var s = normalizeTeacherMetricFields(Object.assign({}, school || {}));
+  return hasRealMetric(s.min15) ? parseFloat(s.min15) : null;
+}
+
+function getSchoolAdjustPct(school) {
+  var s = normalizeTeacherMetricFields(Object.assign({}, school || {}));
+  return hasRealMetric(s.adjust) ? parseFloat(s.adjust) : null;
+}
+
+function hasTeacherBase(school) {
+  var s = school || {};
+  return asNonNegativeInt(s.teacherTotal !== undefined ? s.teacherTotal : s.teachTotal, 0) > 0;
+}
+
+function activeAssignedSchoolIds() {
+  if (!ACTIVE_SN || !Array.isArray(ACTIVE_SN.assigned_schools)) return null;
+  return ACTIVE_SN.assigned_schools.map(function(id){ return parseInt(id); });
+}
+
+function canActiveSNAccessSchool(schoolId) {
+  var assigned = activeAssignedSchoolIds();
+  if (!assigned) return true;
+  return assigned.indexOf(parseInt(schoolId)) >= 0;
+}
+
+function schoolsVisibleToActiveSN() {
+  var assigned = activeAssignedSchoolIds();
+  if (!assigned) return SCHOOLS;
+  return SCHOOLS.filter(function(s){ return assigned.indexOf(parseInt(s.id)) >= 0; });
+}
+
 function shouldUseBaselineImport(school) {
   return !school.baselineAt && (!school.dataSource || school.dataSource === 'sample' || school.dataSource === 'imported' || school.dataSource === 'not_imported');
 }
@@ -4553,6 +4621,9 @@ function makeSchoolShell(base, idx) {
   shell.trend = '→';
   shell.min15 = null;
   shell.adjust = null;
+  shell.teacherTotal = null;
+  shell.teacherMin15Passed = null;
+  shell.teacherAdjustPassed = null;
   shell.sim = null;
   shell.flag = 'gray';
   shell.dataSource = 'not_imported';
@@ -4600,6 +4671,9 @@ function normalizeSchoolRecords(rows, hasPersistedSchools) {
       merged.trend = '→';
       merged.min15 = null;
       merged.adjust = null;
+      merged.teacherTotal = null;
+      merged.teacherMin15Passed = null;
+      merged.teacherAdjustPassed = null;
       merged.sim = null;
       merged.dataSource = 'baseline_import';
       merged.baselineAt = source.importedAt || new Date().toISOString();
@@ -4608,6 +4682,7 @@ function normalizeSchoolRecords(rows, hasPersistedSchools) {
     } else {
       merged.min15 = asNullablePercent(merged.min15);
       merged.adjust = asNullablePercent(merged.adjust);
+      normalizeTeacherMetricFields(merged);
       merged.trend = merged.trend || base.trend || '→';
       merged.sim = merged.sim === undefined ? (base.sim || '→') : merged.sim;
     }
@@ -5458,8 +5533,16 @@ function populateSchoolSelects() {
     const el = document.getElementById(id);
     if (!el) return;
     const isFilter = id === 'history_school_filter';
-    el.innerHTML = isFilter ? '<option value="">ทุกโรงเรียน</option>' : '<option value="">— เลือกโรงเรียน —</option>';
-    SCHOOLS.forEach(s => {
+    const visibleSchools = schoolsVisibleToActiveSN();
+    el.innerHTML = isFilter ? '<option value="">ทุกโรงเรียนที่รับผิดชอบ</option>' : '<option value="">— เลือกโรงเรียน —</option>';
+    if (visibleSchools.length === 0 && ACTIVE_SN) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'ยังไม่ได้กำหนดโรงเรียนให้ ศน. คนนี้';
+      el.appendChild(opt);
+      return;
+    }
+    visibleSchools.forEach(s => {
       const opt = document.createElement('option');
       opt.value = s.id; opt.textContent = s.name;
       el.appendChild(opt);
@@ -5478,8 +5561,12 @@ function autoCalcFlag(redPct) {
 function updateSchoolFromToolkit(schoolId, updates) {
   const idx = SCHOOLS.findIndex(s => s.id === parseInt(schoolId));
   if (idx === -1) return false;
+  if (!canActiveSNAccessSchool(schoolId)) {
+    showNotification('error', 'โรงเรียนนี้อยู่นอกความรับผิดชอบของ ศน. ที่เลือกอยู่');
+    return false;
+  }
   const school = SCHOOLS[idx];
-  const allowedExtra = ['studTotal','studRed','teachTotal','teachMin15','teachAdjust','testType'];
+  const allowedExtra = ['studTotal','studRed','teachTotal','teachMin15','teachAdjust','teacherTotal','teacherMin15Passed','teacherAdjustPassed','teacherMetricSource','testType'];
 
   if (updates.red !== undefined && updates.red !== null && updates.red !== '') {
     const oldRed = asPercent(school.red, 0);
@@ -5498,9 +5585,11 @@ function updateSchoolFromToolkit(schoolId, updates) {
   allowedExtra.forEach(function(key) {
     if (updates[key] !== undefined) school[key] = updates[key];
   });
+  normalizeTeacherMetricFields(school);
   if (updates.flag) school.flag = updates.flag;
   else if (updates.red !== undefined && updates.red !== null && updates.red !== '') school.flag = autoCalcFlag(school.red);
   saveData();
+  syncSchoolsToBackend('school_update');
   refreshDashboard();
   updateSidebarStats();
   return true;
@@ -5610,7 +5699,7 @@ function saveTk1() {
   if (min15) updates.min15 = parseInt(min15);
   if (adjust) updates.adjust = parseInt(adjust);
   if (flag) updates.flag = flag;
-  if (Object.keys(updates).length > 0) updateSchoolFromToolkit(schoolId, updates);
+  if (Object.keys(updates).length > 0) if (!updateSchoolFromToolkit(schoolId, updates)) return;
 
   var log = {
     id: Date.now(), type: 'observation', snName: ACTIVE_SN ? ACTIVE_SN.name : '', snId: ACTIVE_SN ? ACTIVE_SN.id : null,
@@ -5698,7 +5787,7 @@ function saveTk2() {
   const updates = { trend, sim };
   if (redPct > 0 || r === 0) updates.red = redPct;
   if (prevRed !== null) updates.prev = prevRed;
-  updateSchoolFromToolkit(schoolId, updates);
+  if (!updateSchoolFromToolkit(schoolId, updates)) return;
 
   var log = {
     id: Date.now(), type: 'plc', snName: ACTIVE_SN ? ACTIVE_SN.name : '', snId: ACTIVE_SN ? ACTIVE_SN.id : null,
@@ -5736,17 +5825,24 @@ function loadTk3SchoolData() {
   if (!id) { infoEl.style.display='none'; return; }
   const s = SCHOOLS.find(x=>x.id===parseInt(id));
   if (!s) return;
+  normalizeTeacherMetricFields(s);
   infoEl.style.display='';
-  infoEl.innerHTML = `<strong style="color:var(--text)">ข้อมูลปัจจุบัน:</strong> 🔴 ${s.red}% (ก่อนหน้า ${s.prev}%) &nbsp;|&nbsp; 15นาที ${s.min15}% &nbsp;|&nbsp; ปรับสอน ${s.adjust}% &nbsp;|&nbsp; Sim ${s.sim} &nbsp;|&nbsp; Flag: ${{green:'🟢ดี',yellow:'🟡ระวัง',red:'🔴เสี่ยง',gray:'⬛ไม่ครบ'}[s.flag]||'—'}`;
-  // Pre-fill
-  document.getElementById('tk3_red').value = s.red;
-  document.getElementById('tk3_min15').value = s.min15;
-  document.getElementById('tk3_adjust').value = s.adjust;
+  var currentMin15 = getSchoolMin15Pct(s);
+  var currentAdjust = getSchoolAdjustPct(s);
+  var teacherNote = hasTeacherBase(s)
+    ? ' · ครู ' + s.teacherMin15Passed + '/' + s.teacherTotal + ' คนผ่าน 15 นาที'
+    : ' · ยังไม่มีฐานจำนวนครู';
+  infoEl.innerHTML = `<strong style="color:var(--text)">ข้อมูลปัจจุบัน:</strong> 🔴 ${s.red}% (ก่อนหน้า ${s.prev}%) &nbsp;|&nbsp; 15นาที ${metricPct(currentMin15)} &nbsp;|&nbsp; ปรับสอน ${metricPct(currentAdjust)}${teacherNote} &nbsp;|&nbsp; Sim ${s.sim} &nbsp;|&nbsp; Flag: ${{green:'🟢ดี',yellow:'🟡ระวัง',red:'🔴เสี่ยง',gray:'⬛ไม่ครบ'}[s.flag]||'—'}`;
+  document.getElementById('tk3_students_red').value = s.studRed || '';
+  document.getElementById('tk3_students_total').value = s.studTotal || '';
+  document.getElementById('tk3_teachers_total').value = s.teacherTotal || s.teachTotal || '';
+  document.getElementById('tk3_teachers_min15').value = s.teacherMin15Passed || s.teachMin15 || '';
+  document.getElementById('tk3_teachers_adjust').value = s.teacherAdjustPassed || s.teachAdjust || '';
   document.getElementById('tk3_sim').value = s.sim;
   document.getElementById('tk3_flag').value = '';
-  updateTk3AutoFlag();
+  calcTk3RedPct();
+  calcTk3TeacherPct();
 }
-
 // tk3_red oninput is set inline in HTML
 
 function updateTk3AutoFlag() {
@@ -6013,6 +6109,7 @@ window.setActiveSN = function(svId) {
     localStorage.removeItem(DB_KEYS.ACTIVE_SN);
     document.getElementById('sn_active_badge').style.display = 'none';
     showNotification('info','ออกจากระบบ ศน. แล้ว');
+    populateSchoolSelects();
     updateSNStampBar();
     return;
   }
@@ -6025,9 +6122,9 @@ window.setActiveSN = function(svId) {
   if (badge) badge.style.display = '';
   if (label) label.textContent = sv.name + ' (เลือกแล้ว ✅)';
   showNotification('success', '✅ เลือก ' + sv.name + ' แล้ว — Toolkit Log จะ stamp ชื่อคุณอัตโนมัติ');
+  populateSchoolSelects();
   updateSNStampBar();
 };
-
 function renderSNLoginBar() {
   populateSNSelects();
   if (ACTIVE_SN) {
@@ -6066,7 +6163,7 @@ function renderTeamSummaryCards() {
   var redSchools = SCHOOLS.filter(function(s){return s.flag==='red';}).length;
   var avgLogsPerSN = SUPERVISORS.length > 0 ? Math.round(totalLogs / SUPERVISORS.length) : 0;
   var kpiTarget = SETTINGS.kpiMin15Target || 80;
-  var metTarget = SCHOOLS.filter(function(s){return hasRealMetric(s.min15) && s.min15>=kpiTarget;}).length;
+  var metTarget = SCHOOLS.filter(function(s){ var pct = getSchoolMin15Pct(s); return hasRealMetric(pct) && pct>=kpiTarget; }).length;
 
   el.innerHTML =
     teamSumCard('teal','👥',SUPERVISORS.length,'ศน. ในทีม','17 คน') +
@@ -9170,12 +9267,16 @@ window.saveTk3 = function() {
     updates.teachTotal   = teachTotal;
     updates.teachMin15   = teachMin15;
     updates.teachAdjust  = teachAdjust;
+    updates.teacherTotal = teachTotal;
+    updates.teacherMin15Passed = teachMin15;
+    updates.teacherAdjustPassed = teachAdjust;
+    updates.teacherMetricSource = 'teacher_counts';
   }
   if (sim) updates.sim = sim;
   if (flagOverride) updates.flag = flagOverride;
   updates.testType = testType;
 
-  updateSchoolFromToolkit(schoolId, updates);
+  if (!updateSchoolFromToolkit(schoolId, updates)) return;
 
   var log = {
     id: Date.now(), type: 'dashboard',
@@ -9246,7 +9347,7 @@ window.saveTk2 = function() {
   var updates = { trend: trend, sim: sim };
   if (total > 0) { updates.red = redPct; }
   if (prevRaw !== null) { updates.prev = prevRedPct || prevRaw; }
-  updateSchoolFromToolkit(schoolId, updates);
+  if (!updateSchoolFromToolkit(schoolId, updates)) return;
 
   var log = {
     id: Date.now(), type: 'plc',
@@ -9504,6 +9605,7 @@ document.addEventListener('DOMContentLoaded', () => {
 <script src="frontend-adapter/smart-supervision-api-client.js"></script>
 </body>
 </html>
+
 
 
 
