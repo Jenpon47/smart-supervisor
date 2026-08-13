@@ -5479,11 +5479,24 @@ function loadLogs() {
   if (!Array.isArray(LOGS)) LOGS = [];
 }
 
+function logIdentity(log) {
+  if (!log) return '';
+  if (log.id !== undefined && log.id !== null && log.id !== '') return String(log.id);
+  if (log.client_log_id !== undefined && log.client_log_id !== null && log.client_log_id !== '') return String(log.client_log_id);
+  return [
+    log.type || '',
+    log.schoolId || log.school_id || '',
+    log.date || log.month || '',
+    log.teacher || '',
+    log.nextStep || ''
+  ].join('|');
+}
+
 function mergeLogsById(localLogs, remoteLogs) {
   var byId = {};
   (remoteLogs || []).concat(localLogs || []).forEach(function(log) {
     if (!log) return;
-    var id = log.id != null ? String(log.id) : String(Date.now() + Math.random());
+    var id = logIdentity(log) || String(Date.now() + Math.random());
     byId[id] = Object.assign({}, byId[id] || {}, log);
   });
   return Object.keys(byId).map(function(id){ return byId[id]; }).sort(function(a,b) {
@@ -5491,30 +5504,61 @@ function mergeLogsById(localLogs, remoteLogs) {
   });
 }
 
-async function loadSharedLogsFromBackend() {
+function renderSharedLogViews() {
+  updateSidebarStats();
+  renderDashboardLogs();
+  if (document.getElementById('history_list')) renderHistory();
+  if ((document.querySelector('.page.active') || {}).id === 'page-team') renderTeamDashboard();
+}
+
+async function loadSharedLogsFromBackend(reason) {
   if (!window.SmartAPI || !SmartAPI.listLogs) return false;
   try {
+    var localBefore = Array.isArray(LOGS) ? LOGS.slice() : [];
     var rows = await SmartAPI.listLogs();
-    if (Array.isArray(rows) && rows.length > 0) {
-      LOGS = mergeLogsById(LOGS, rows);
-      saveLogs(false);
-      showNotification('success', 'โหลด Toolkit Log กลางเรียบร้อย');
-      return true;
-    }
-    if (Array.isArray(rows) && rows.length === 0 && LOGS.length > 0 && SmartAPI.syncLogs) {
+    if (!Array.isArray(rows)) rows = [];
+
+    var remoteIds = {};
+    rows.forEach(function(log){ var id = logIdentity(log); if (id) remoteIds[id] = true; });
+    var hasLocalOnly = localBefore.some(function(log){
+      var id = logIdentity(log);
+      return id && !remoteIds[id];
+    });
+
+    LOGS = mergeLogsById(localBefore, rows);
+    saveLogs(false);
+
+    if (LOGS.length > 0 && SmartAPI.syncLogs && (hasLocalOnly || rows.length === 0)) {
       await SmartAPI.syncLogs(LOGS);
-      showNotification('success', 'ส่ง Toolkit Log ชุดแรกขึ้นระบบกลางเรียบร้อย');
+      rows = await SmartAPI.listLogs();
+      if (Array.isArray(rows)) {
+        LOGS = mergeLogsById(LOGS, rows);
+        saveLogs(false);
+      }
+      showNotification('success', 'รวม Toolkit Log ของทีมขึ้นระบบกลางแล้ว');
+    } else if (rows.length > 0) {
+      showNotification('success', 'โหลด Toolkit Log กลางเรียบร้อย');
     }
+
+    renderSharedLogViews();
+    return true;
   } catch(e) {
     console.warn('Shared log fetch failed, using local logs:', e);
   }
   return false;
 }
 
+function refreshSharedLogsAndRender(reason) {
+  renderSharedLogViews();
+  loadSharedLogsFromBackend(reason).then(function(){ renderSharedLogViews(); });
+}
+
 function saveLogs(syncToBackend) {
   safeWriteJSON(DB_KEY_LOGS, LOGS);
   if (syncToBackend !== false && window.SmartAPI && SmartAPI.syncLogs) {
-    SmartAPI.syncLogs(LOGS).catch(function(err) {
+    SmartAPI.syncLogs(LOGS).then(function() {
+      loadSharedLogsFromBackend('after_save');
+    }).catch(function(err) {
       console.warn('Backend log sync failed:', err);
     });
   }
@@ -5525,7 +5569,7 @@ function switchToolkitTab(id, btn) {
   document.querySelectorAll('#page-toolkit .tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   btn.classList.add('active');
-  if (id === 'tk_history') renderHistory();
+  if (id === 'tk_history') refreshSharedLogsAndRender('history');
 }
 
 function populateSchoolSelects() {
@@ -5986,8 +6030,9 @@ function renderHistory() {
       if (l.followup) chips.push(`📅 Follow-up: ${l.followup}`);
       if (l.prevResult) chips.push({done:'✅ Next Step เดิมสำเร็จ',partial:'⚠️ ทำบางส่วน',not_done:'❌ ยังไม่ได้ทำ',first:'ครั้งแรก'}[l.prevResult]||'');
     }
+    const deleteId = String(logIdentity(l)).replace(/'/g, "\\'");
     return `<div class="log-card">
-      <button class="log-delete-btn" onclick="deleteLog(${l.id})" title="ลบ">✕</button>
+      <button class="log-delete-btn" onclick="deleteLog('${deleteId}')" title="ซ่อนรายการนี้เฉพาะเครื่องนี้">✕</button>
       <div class="log-card-header">
         <span class="log-type-badge ${typeCls[l.type]}">${typeLabels[l.type]}</span>
         <span class="log-school">${l.schoolName}</span>
@@ -6001,15 +6046,17 @@ function renderHistory() {
 }
 
 function deleteLog(id) {
-  LOGS = LOGS.filter(l => l.id !== id);
-  saveLogs();
+  LOGS = LOGS.filter(l => String(l.id) !== String(id));
+  saveLogs(false);
   renderHistory();
+  showNotification('info','ซ่อนรายการนี้เฉพาะเครื่องนี้แล้ว ข้อมูลกลางของทีมยังอยู่');
 }
 
 function clearAllLogs() {
-  if (!confirm('ลบประวัติการบันทึกทั้งหมด?')) return;
-  LOGS = []; saveLogs(); renderHistory();
-  showNotification('info','🗑️ ล้างประวัติแล้ว');
+  if (!confirm('ล้างประวัติที่เก็บในเครื่องนี้? ข้อมูลกลางของทีมจะไม่ถูกลบ')) return;
+  LOGS = []; saveLogs(false); renderHistory();
+  loadSharedLogsFromBackend('clear_local');
+  showNotification('info','ล้างประวัติในเครื่องแล้ว และกำลังโหลดข้อมูลกลางกลับมา');
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -6053,7 +6100,7 @@ window.switchTeamTab = function(id, btn) {
   btn.classList.add('active');
   if (id === 'team_kpi')    renderTeamKPI();
   if (id === 'team_schools') { populateSNSchoolSelect(); renderSNSchools(); }
-  if (id === 'team_logs')   { populateSNLogSelect(); renderSNLogs(); }
+  if (id === 'team_logs')   { populateSNLogSelect(); refreshSharedLogsAndRender('team_logs'); }
   if (id === 'team_map')    renderTeamMap();
   if (id === 'team_admin')  renderTeamAdminTable();
 };
@@ -9514,10 +9561,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if ((document.querySelector('.page.active') || {}).id === 'page-team') renderTeamDashboard();
   });
 
-  loadSharedLogsFromBackend().then(function() {
-    renderDashboardLogs();
-    renderHistory();
-    if ((document.querySelector('.page.active') || {}).id === 'page-team') renderTeamDashboard();
+  loadSharedLogsFromBackend('boot').then(function() {
+    renderSharedLogViews();
   });
 
   // Set today's date defaults
